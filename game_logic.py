@@ -170,6 +170,38 @@ class GameManager:
             
         return total_bonus
 
+    def get_tradeable_set(self, player: Player) -> Optional[List[str]]:
+        """Returns the best tradeable set of 3 cards for a player, or None if no valid set exists."""
+        if len(player.cards) < 3:
+            return None
+
+        cards = player.cards
+        card_types = {c: self._get_card_type(c) for c in cards}
+        jolly_cards = [c for c in cards if card_types[c] == UnitType.JOLLY]
+        non_jolly = [c for c in cards if card_types[c] != UnitType.JOLLY]
+
+        # Try Jolly + 2 of same type (highest bonus = 12)
+        for jolly in jolly_cards:
+            for unit_type in [UnitType.FANTE, UnitType.CAVALLO, UnitType.CANNONE]:
+                same = [c for c in non_jolly if card_types[c] == unit_type]
+                if len(same) >= 2:
+                    return [jolly, same[0], same[1]]
+
+        # Try 1 of each type (bonus = 10)
+        fante = [c for c in non_jolly if card_types[c] == UnitType.FANTE]
+        cavallo = [c for c in non_jolly if card_types[c] == UnitType.CAVALLO]
+        cannone = [c for c in non_jolly if card_types[c] == UnitType.CANNONE]
+        if fante and cavallo and cannone:
+            return [fante[0], cavallo[0], cannone[0]]
+
+        # Try 3 of same type (bonus = 8)
+        for unit_type in [UnitType.FANTE, UnitType.CAVALLO, UnitType.CANNONE]:
+            same = [c for c in non_jolly if card_types[c] == unit_type]
+            if len(same) >= 3:
+                return [same[0], same[1], same[2]]
+
+        return None
+
     def trade_cards(self, card_names: List[str]) -> bool:
         if self.phase != GamePhase.PLACE_ARMIES:
             return False
@@ -366,7 +398,9 @@ class GameManager:
         self.add_log(f"{player.name} deployed {count} units to {territory_name}")
         return True
 
-    def attack(self, attacker_name: str, defender_name: str, attacker_dice: int) -> Optional[Dict]:
+    def attack(self, attacker_name: str, defender_name: str, attacker_count: int) -> Optional[Dict]:
+        """Attack with `attacker_count` total units. Dice are capped at 3 per standard rules.
+        On conquest, all surviving committed units move into the territory."""
         if self.phase != GamePhase.BATTLE:
             return None
         
@@ -384,8 +418,12 @@ class GameManager:
         if defender_name not in game_map.adjacency.get(attacker_name, []):
             return None
         
-        # Cap dice
-        attacker_dice = min(attacker_dice, att_t.units - 1, 3)
+        # Clamp committed units to what is actually available (must leave at least 1 behind)
+        attacker_count = min(attacker_count, att_t.units - 1)
+        attacker_count = max(1, attacker_count)
+
+        # Dice are always capped at 3 per standard Risk rules
+        attacker_dice = min(attacker_count, 3)
         defender_dice = min(def_t.units, 3)
         
         att_rolls = sorted([random.randint(1, 6) for _ in range(attacker_dice)], reverse=True)
@@ -413,9 +451,13 @@ class GameManager:
             def_t.owner = self.get_current_player()
             def_t.owner.territories_count += 1
             
-            # Move attacking units
-            def_t.units = attacker_dice - att_losses
-            att_t.units -= (attacker_dice - att_losses)
+            # Move ALL committed units (minus dice losses) into the conquered territory
+            surviving_committed = attacker_count - att_losses
+            surviving_committed = max(1, surviving_committed)  # Ensure at least 1 moves in
+            # Ensure the source still keeps at least 1 unit
+            surviving_committed = min(surviving_committed, att_t.units - 1)
+            def_t.units = surviving_committed
+            att_t.units -= surviving_committed
 
             # If old_owner is now fully eliminated, check elimination objectives
             if old_owner.territories_count == 0:

@@ -43,7 +43,7 @@ class ReinforceRequest(BaseModel):
 class AttackRequest(BaseModel):
     attacker: str
     defender: str
-    dice: int
+    attacker_count: int  # Total units committed; dice are capped at 3 internally
 
 
 class FortifyRequest(BaseModel):
@@ -135,7 +135,7 @@ async def reinforce(req: ReinforceRequest, sim_id: str):
 @app.post("/api/action/attack")
 async def attack(req: AttackRequest, sim_id: str):
     game = get_game(sim_id)
-    result = game.attack(req.attacker, req.defender, req.dice)
+    result = game.attack(req.attacker, req.defender, req.attacker_count)
     if result is None:
         raise HTTPException(status_code=400, detail="Invalid attack")
     return {"result": result, "state": game.get_state()}

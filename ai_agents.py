@@ -74,6 +74,7 @@ class BaseAgent:
                 if game.phase == GamePhase.INITIAL_PLACEMENT:
                     self._random_place(game)
                 elif game.phase == GamePhase.PLACE_ARMIES:
+                    self._use_card(game)  # Use any available card sets first
                     self._random_place(game)
                     game.next_phase()
                 elif game.phase == GamePhase.BATTLE:
@@ -90,6 +91,18 @@ class BaseAgent:
                 print(f"[AI Error] {self.name} encountered error: {e}")
                 game.next_phase()
             time.sleep(0.3)
+
+    def _use_card(self, game: GameManager):
+        """Greedily trade all valid card sets for bonus reinforcements."""
+        player = game.get_current_player()
+        while True:
+            best_set = game.get_tradeable_set(player)
+            if best_set is None:
+                break
+            success = game.trade_cards(best_set)
+            if not success:
+                break
+            print(f"[AI] {self.name} traded cards {best_set} for bonus reinforcements")
 
     def _random_place(self, game: GameManager):
         player = game.get_current_player()
@@ -153,6 +166,25 @@ def create_game_tools(game: GameManager):
             return f"Attack result: {res}. Conquered: {res['conquered']}."
         return "Failed to attack. Check adjacency, ownership, and unit counts."
 
+    def trade_cards_tool(card_names: str) -> str:
+        """Trade a set of 3 cards (comma-separated names) for bonus reinforcements. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8). Call get_state_tool first to see your cards."""
+        try:
+            cards = [c.strip() for c in card_names.split(',')]
+            if len(cards) != 3:
+                return "Error: Provide exactly 3 card names separated by commas."
+            
+            # Check if player actually owns these cards and if they form a set
+            player = game.get_current_player()
+            if not all(c in player.cards for c in cards):
+                return f"Error: You do not own some of these cards: {cards}"
+            
+            success = game.trade_cards(cards)
+            if success:
+                return f"Success: Cards {cards} traded! New reinforcements available: {game.reinforcements_to_place}."
+            return f"Error: {cards} do not form a valid set. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8)."
+        except Exception as e:
+            return f"Error trading cards: {e}"
+
     def fortify_tool(from_t_name: str, to_t_name: str, count: int) -> str:
         """Moves armies from one of your territories to an adjacent territory you own."""
         success = game.fortify(from_t_name, to_t_name, count)
@@ -173,6 +205,7 @@ def create_game_tools(game: GameManager):
         StructuredTool.from_function(attack_tool),
         StructuredTool.from_function(fortify_tool),
         StructuredTool.from_function(end_phase_tool),
+        StructuredTool.from_function(trade_cards_tool),
     ]
 
 
@@ -279,9 +312,23 @@ class CrewAIFaction:
                 f"on one of your territories. DO NOT place more than {game.reinforcements_to_place}."
             )
         elif phase_name == "PLACE_ARMIES":
+            player = next((p for p in game.players if p.name == self.name), None)
+            cards_info = ""
+            if player and len(player.cards) >= 3:
+                best_set = game.get_tradeable_set(player)
+                if best_set:
+                    cards_info = (
+                        f"\n\nIMPORTANT — You hold cards: {player.cards}. "
+                        f"A valid tradeable set was detected: {best_set}. "
+                        f"Use 'trade_cards_tool' with these card names (comma-separated) to gain bonus reinforcements BEFORE placing armies. "
+                        f"You may also trade additional sets if you have more cards."
+                    )
+                else:
+                    cards_info = f"\n\nYou hold {len(player.cards)} cards but no tradeable set yet."
             task_desc = (
                 f"Use 'place_armies_tool' to place {game.reinforcements_to_place} armies across "
                 f"your territories strategically. When done, use 'end_phase_tool'."
+                f"{cards_info}"
             )
         elif phase_name == "BATTLE":
             task_desc = (

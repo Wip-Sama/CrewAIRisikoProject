@@ -56,6 +56,7 @@ function App() {
   const [hoveredPlayer, setHoveredPlayer] = useState<string | null>(null)
   const [diceCount, setDiceCount] = useState<number>(3)
   const [hoveredCard, setHoveredCard] = useState<{ name: string, type: string } | null>(null)
+  const [selectedCards, setSelectedCards] = useState<string[]>([])
   const [moveCount, setMoveCount] = useState<number>(1)
   const [hoveredPlayerTop, setHoveredPlayerTop] = useState<number>(0)
   const logRef = reactRef<HTMLDivElement>(null)
@@ -160,6 +161,32 @@ function App() {
   if (!gameState && !showBatchModal) return <div className="loading">Loading Engine...</div>
 
   const isCurrentPlayer = (owner: string) => gameState ? owner === gameState.current_player : false
+
+  const isValidTrade = (selectedNames: string[]) => {
+    if (selectedNames.length !== 3 || !gameState) return false
+    const player = gameState.players.find(p => p.name === gameState.current_player)
+    if (!player) return false
+    const selected = player.cards.filter(c => selectedNames.includes(c.name))
+    if (selected.length !== 3) return false
+
+    const counts: Record<string, number> = {}
+    selected.forEach(c => counts[c.type] = (counts[c.type] || 0) + 1)
+
+    const jolly = counts['JOLLY'] || 0
+    const fante = counts['FANTE'] || 0
+    const cavallo = counts['CAVALLO'] || 0
+    const cannone = counts['CANNONE'] || 0
+
+    // Match backend logic in game_logic.py:
+    // 1 Jolly + 2 of same type
+    if (jolly === 1 && (fante === 2 || cavallo === 2 || cannone === 2)) return true
+    // 1 of each type
+    if (fante === 1 && cavallo === 1 && cannone === 1) return true
+    // 3 of same type
+    if (fante === 3 || cavallo === 3 || cannone === 3) return true
+
+    return false
+  }
 
   const getNextPhase = () => {
     if (!gameState) return '...'
@@ -285,10 +312,21 @@ function App() {
                     {/* Cards Display */}
                     {p.cards.length > 0 && (
                       <div className="card-mini-list">
-                        {p.cards.map((c, i) => (
+                        {p.cards.map((c, i) => {
+                          const isSelectable = gameState.is_human_turn && p.name === gameState.current_player && (gameState.phase === 'PLACE_ARMIES')
+                          const isSelected = selectedCards.includes(c.name)
+                          return (
                           <div
                             key={`${p.name}-card-${i}`}
-                            className={`card-mini ${c.type.toLowerCase()}`}
+                            className={`card-mini ${c.type.toLowerCase()} ${isSelected ? 'selected' : ''} ${isSelectable ? 'selectable' : ''}`}
+                            onClick={() => {
+                              if (!isSelectable) return
+                              setSelectedCards(prev =>
+                                prev.includes(c.name)
+                                  ? prev.filter(x => x !== c.name)
+                                  : prev.length < 3 ? [...prev, c.name] : prev
+                              )
+                            }}
                             onMouseEnter={() => setHoveredCard({ name: c.name, type: c.type })}
                             onMouseLeave={() => setHoveredCard(null)}
                             style={{ position: 'relative' }}
@@ -308,8 +346,22 @@ function App() {
                               )}
                             </AnimatePresence>
                           </div>
-                        ))}
+                        )})}
                       </div>
+                    )}
+
+                    {/* Trade Cards button - visible when 3 cards are selected and it's this player's placement turn */}
+                    {p.name === gameState.current_player && gameState.is_human_turn && gameState.phase === 'PLACE_ARMIES' && selectedCards.length === 3 && (
+                      <button
+                        className={`btn-trade-cards ${isValidTrade(selectedCards) ? '' : 'disabled'}`}
+                        disabled={!isValidTrade(selectedCards)}
+                        onClick={async () => {
+                          await handleAction('trade_cards', { cards: selectedCards })
+                          setSelectedCards([])
+                        }}
+                      >
+                        {isValidTrade(selectedCards) ? '🃏 Trade Cards (+Bonus)' : '🚫 Invalid Set'}
+                      </button>
                     )}
                   </div>
                 </div>
@@ -480,18 +532,24 @@ function App() {
 
                   {gameState.phase === 'BATTLE' && selectedTerritory?.owner === gameState.current_player && targetTerritory && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      <p className="label">Attack with:</p>
-                      <div className="dice-selector">
-                        {[1, 2, 3].map(n => (
-                          <button
-                            key={n}
-                            className={`dice-btn ${diceCount === n ? 'active' : ''}`}
-                            disabled={selectedTerritory!.units <= n}
-                            onClick={() => setDiceCount(n)}
-                          >
-                            {n}
-                          </button>
-                        ))}
+                      <div className="move-count-display">
+                        <p className="label">Units to attack with:</p>
+                        <span className="move-value" style={{ color: '#ef4444' }}>{diceCount}</span>
+                      </div>
+                      <div className="move-slider-container">
+                        <input
+                          type="range"
+                          min="1"
+                          max={selectedTerritory!.units - 1}
+                          value={diceCount}
+                          onChange={(e) => setDiceCount(parseInt(e.target.value))}
+                          className="move-slider attack-slider"
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                          <span>1</span>
+                          <span style={{ color: '#94a3b8' }}>🎲 {Math.min(diceCount, 3)} dice rolled</span>
+                          <span>Max ({selectedTerritory!.units - 1})</span>
+                        </div>
                       </div>
                       <button
                         className="btn-primary"
@@ -500,10 +558,10 @@ function App() {
                         onClick={() => handleAction('attack', {
                           attacker: selectedTerritory!.name,
                           defender: targetTerritory.name,
-                          dice: diceCount
+                          attacker_count: diceCount
                         })}
                       >
-                        <Swords size={16} /> Launch Attack
+                        <Swords size={16} /> Launch Attack ({diceCount} units)
                       </button>
                     </div>
                   )}
