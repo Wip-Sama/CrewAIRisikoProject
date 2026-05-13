@@ -700,7 +700,11 @@ function App() {
                         >
                           <option value="human">Human</option>
                           <option value="base">Base AI</option>
-                          <option value="crew">CrewAI Faction</option>
+                          <option value="crew:openai">CrewAI (GPT-4o)</option>
+                          <option value="crew:google">CrewAI (Gemini)</option>
+                          <option value="crew:groq">CrewAI (Groq)</option>
+                          <option value="crew:ollama">CrewAI (Gemma Local)</option>
+                          <option value="crew:lmstudio">CrewAI (LM Studio)</option>
                         </select>
                       </div>
                     ))}

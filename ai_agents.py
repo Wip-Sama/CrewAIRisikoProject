@@ -24,11 +24,13 @@ os.makedirs(TRAINING_DIR, exist_ok=True)
 _scorer = GameScorer()
 
 # LLM Configuration
-def get_llm():
+def get_llm(provider=None):
     """
     Returns a configured LangChain ChatModel based on .env settings.
     """
-    provider = os.getenv("MODEL_PROVIDER", "openai").lower()
+    if not provider:
+        provider = os.getenv("MODEL_PROVIDER", "openai").lower()
+    
     try:
         if provider == "openai":
             from langchain_openai import ChatOpenAI
@@ -51,6 +53,19 @@ def get_llm():
             if not api_key:
                 print("[Warning] GROQ_API_KEY not found in .env")
             return ChatGroq(model=os.getenv("GROQ_MODEL_NAME", "llama3-70b-8192"), groq_api_key=api_key)
+        elif provider == "ollama":
+            from langchain_ollama import ChatOllama
+            return ChatOllama(
+                model=os.getenv("OLLAMA_MODEL_NAME", "gemma"),
+                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            )
+        elif provider == "lmstudio":
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=os.getenv("LMSTUDIO_MODEL_NAME", "local-model"),
+                base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
+                api_key="not-needed"
+            )
     except Exception as e:
         print(f"[LLM Error] Failed to initialize {provider} provider: {e}")
     return None
@@ -210,7 +225,7 @@ def create_game_tools(game: GameManager):
 
 
 class TerritoryAgent:
-    def __init__(self, name: str, starting_territory: str):
+    def __init__(self, name: str, starting_territory: str, llm=None):
         self.name = name
         self.territories = [starting_territory]
         self.crew_agent = Agent(
@@ -219,7 +234,7 @@ class TerritoryAgent:
             backstory=f"You are a seasoned military commander for {starting_territory}.",
             verbose=False,
             allow_delegation=True,
-            llm=get_llm()
+            llm=llm if llm else get_llm()
         )
 
     def update_goal(self):
@@ -236,13 +251,14 @@ class CrewAIFaction:
     No human interaction required — scoring is fully automatic.
     """
 
-    def __init__(self, player_name: str, scoring_enabled: bool = True):
+    def __init__(self, player_name: str, scoring_enabled: bool = True, provider: str = None):
         self.name = player_name
         self.agents: List[TerritoryAgent] = []
         self.initialized = False
         self.scoring_enabled = scoring_enabled
         self.last_score: Optional[TurnScore] = None
         self.turn_history: List[Dict] = []  # Persisted score history
+        self.llm = get_llm(provider)
 
     def _sync_territories(self, game: GameManager):
         player = game.get_current_player()
@@ -250,7 +266,7 @@ class CrewAIFaction:
 
         if not self.initialized:
             for t_name in my_territory_names:
-                self.agents.append(TerritoryAgent(f"Agent_{t_name}", t_name))
+                self.agents.append(TerritoryAgent(f"Agent_{t_name}", t_name, llm=self.llm))
             self.initialized = True
             return
 
@@ -407,8 +423,10 @@ class SimulationManager:
 
             if agent_type != "human":
                 game.players[i].is_ai = True
-                if agent_type == "crew":
-                    self.ai_factions[sim_id][p_name] = CrewAIFaction(p_name, scoring_enabled=scoring_enabled)
+                if agent_type.startswith("crew"):
+                    parts = agent_type.split(":")
+                    provider = parts[1] if len(parts) > 1 else None
+                    self.ai_factions[sim_id][p_name] = CrewAIFaction(p_name, scoring_enabled=scoring_enabled, provider=provider)
                 elif agent_type == "base":
                     self.base_agents[sim_id][p_name] = BaseAgent(p_name)
 
