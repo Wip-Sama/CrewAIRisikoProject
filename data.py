@@ -1,25 +1,24 @@
-INIT_PHASE 				= 0
+from enum import Enum, auto
 
-ASSIGN_STD_ARMIES_PHASE	= 1
+class GamePhase(Enum):
+    INIT = auto()
+    INITIAL_PLACEMENT = auto()
+    ASSIGN_STD_ARMIES = auto()
+    ASK_FOR_CARDS = auto()
+    PLACE_ARMIES = auto()
+    BATTLE = auto()
+    WAR = auto()
+    CONQUER = auto()
+    MOVE = auto()
+    DRAW_CARD = auto()
+    ENDGAME = auto()
 
-ASK_FOR_CARDS_PHASE		= 2
+class UnitType(Enum):
+    CANNONE = 0
+    FANTE = 1
+    CAVALLO = 2
+    JOLLY = 3
 
-PLACE_ARMIES_PHASE		= 3
-
-BATTLE_PHASE			= 4
-
-WAR_PHASE				= 5
-
-CONQUER_PHASE			= 6
-
-MOVE_PHASE				= 7
-
-DRAW_CARD_PHASE			= 8
-
-
-
-
-CANNONE = 0
-FANTE = 1
-CAVALLO = 2
-JOLLY = 3
+# UI Constants (legacy, might be refactored later)
+phase_button = [(50, 720), (300, 830)]
+phase_text = (100, 785)
