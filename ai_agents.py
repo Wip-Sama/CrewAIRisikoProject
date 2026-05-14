@@ -10,8 +10,8 @@ from game_logic import GameManager, GamePhase
 from data import UnitType
 from scorer import GameScorer, TurnScore
 
-from crewai import Agent, Task, Crew, Process
-from langchain_core.tools import StructuredTool
+from crewai import Agent, Task, Crew, Process, LLM
+from crewai.tools import tool
 import json
 import logging
 
@@ -26,49 +26,121 @@ _scorer = GameScorer()
 # LLM Configuration
 def get_llm(provider=None):
     """
-    Returns a configured LangChain ChatModel based on .env settings.
+    Returns a configured crewai.LLM instance based on .env settings.
     """
     if not provider:
         provider = os.getenv("MODEL_PROVIDER", "openai").lower()
     
     try:
         if provider == "openai":
-            from langchain_openai import ChatOpenAI
             api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                print("[Warning] OPENAI_API_KEY not found in .env")
-            return ChatOpenAI(model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"), api_key=api_key)
+            return LLM(model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"), api_key=api_key)
         elif provider == "google":
-            from langchain_google_genai import ChatGoogleGenerativeAI
             api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                print("[Warning] GOOGLE_API_KEY not found in .env")
-            return ChatGoogleGenerativeAI(
-                model=os.getenv("GOOGLE_MODEL_NAME", "gemini-1.5-pro"),
-                google_api_key=api_key
-            )
+            # crewai.LLM handles 'gemini/' prefix natively or expects 'google/'
+            model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-1.5-pro")
+            if not model_name.startswith("gemini/"):
+                model_name = f"gemini/{model_name}"
+            return LLM(model=model_name, api_key=api_key)
         elif provider == "groq":
-            from langchain_groq import ChatGroq
             api_key = os.getenv("GROQ_API_KEY")
-            if not api_key:
-                print("[Warning] GROQ_API_KEY not found in .env")
-            return ChatGroq(model=os.getenv("GROQ_MODEL_NAME", "llama3-70b-8192"), groq_api_key=api_key)
+            model_name = os.getenv("GROQ_MODEL_NAME", "llama-3.1-8b-instant")
+            # Groq needs 'groq/' prefix for LiteLLM
+            if not model_name.startswith("groq/"):
+                model_name = f"groq/{model_name}"
+            return LLM(model=model_name, api_key=api_key)
         elif provider == "ollama":
-            from langchain_ollama import ChatOllama
-            return ChatOllama(
-                model=os.getenv("OLLAMA_MODEL_NAME", "gemma"),
-                base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            model_name = os.getenv("OLLAMA_MODEL_NAME", "gemma")
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+            return LLM(
+                model=f"ollama/{model_name}",
+                base_url=base_url
             )
         elif provider == "lmstudio":
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(
-                model=os.getenv("LMSTUDIO_MODEL_NAME", "local-model"),
+            model_name = os.getenv("LMSTUDIO_MODEL_NAME", "local-model")
+            return LLM(
+                model=f"openai/{model_name}",
                 base_url=os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"),
                 api_key="not-needed"
             )
     except Exception as e:
         print(f"[LLM Error] Failed to initialize {provider} provider: {e}")
     return None
+
+
+def create_game_tools(game: GameManager):
+    @tool("get_state_tool")
+    def get_state_tool(reason: str) -> str:
+        """Returns the current game state, including map territories and your available reinforcements. 
+        Provide a brief reason for requesting the state (e.g., 'Planning attack')."""
+        state = game.get_player_state(game.get_current_player().name)
+        return json.dumps(state)
+
+    @tool("place_armies_tool")
+    def place_armies_tool(territory_name: str, count: int) -> str:
+        """Places the specified number of armies on a territory you own. 
+        You can call this multiple times to split your total reinforcements across different territories."""
+        success = game.place_armies(territory_name, count)
+        if success:
+            return f"Successfully placed {count} armies on {territory_name}."
+        return "Failed to place armies. Check phase, ownership, and available reinforcements."
+
+    @tool("attack_tool")
+    def attack_tool(attacker_name: str, defender_name: str, attacker_dice: int) -> str:
+        """Attacks an adjacent enemy territory from one of your territories with the specified number of dice (1-3)."""
+        res = game.attack(attacker_name, defender_name, attacker_dice)
+        if res:
+            return f"Attack result: {res}. Conquered: {res['conquered']}."
+        return "Failed to attack. Check adjacency, ownership, and unit counts."
+
+    @tool("trade_cards_tool")
+    def trade_cards_tool(card_names: str) -> str:
+        """Trade a set of 3 cards (comma-separated names) for bonus reinforcements. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8). Call get_state_tool first to see your cards."""
+        try:
+            cards = [c.strip() for c in card_names.split(',')]
+            if len(cards) != 3:
+                return "Error: Provide exactly 3 card names separated by commas."
+            
+            # Check if player actually owns these cards and if they form a set
+            player = game.get_current_player()
+            if not all(c in player.cards for c in cards):
+                return f"Error: You do not own some of these cards: {cards}"
+            
+            success = game.trade_cards(cards)
+            if success:
+                return f"Success: Cards {cards} traded! New reinforcements available: {game.reinforcements_to_place}."
+            return f"Error: {cards} do not form a valid set. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8)."
+        except Exception as e:
+            return f"Error trading cards: {e}"
+
+    @tool("fortify_tool")
+    def fortify_tool(from_t_name: str, to_t_name: str, count: int) -> str:
+        """Moves armies from one of your territories to an adjacent territory you own."""
+        success = game.fortify(from_t_name, to_t_name, count)
+        if success:
+            return f"Successfully fortified {to_t_name} from {from_t_name}."
+        return "Failed to fortify. Check adjacency, ownership, and unit counts."
+
+    @tool("end_phase_tool")
+    def end_phase_tool(confirmation: bool) -> str:
+        """Ends your current phase. Use this when you are done attacking or fortifying. 
+        Set confirmation=True to proceed."""
+        if not confirmation:
+            return "Phase not ended because confirmation was False."
+        success = game.next_phase()
+        if success:
+            return "Phase ended successfully."
+        return "Could not end phase right now."
+
+    return [
+        get_state_tool,
+        place_armies_tool,
+        attack_tool,
+        fortify_tool,
+        end_phase_tool,
+        trade_cards_tool,
+    ]
+
 
 
 class BaseAgent:
@@ -124,9 +196,18 @@ class BaseAgent:
         my_territories = [t for t in game.territories.values() if t.owner == player]
         if not my_territories:
             return
-        target = random.choice(my_territories)
-        count = game.reinforcements_to_place
-        if count > 0:
+        
+        while game.reinforcements_to_place > 0:
+            # Randomly split reinforcements: place between 1 and the total remaining
+            # but usually in smaller chunks to encourage variety
+            max_chunk = max(1, game.reinforcements_to_place // 2 + 1)
+            count = random.randint(1, min(game.reinforcements_to_place, max_chunk))
+            
+            # During INITIAL_PLACEMENT, we are limited to 3 per turn anyway
+            if game.phase == GamePhase.INITIAL_PLACEMENT:
+                count = min(count, game.reinforcements_to_place)
+
+            target = random.choice(my_territories)
             game.place_armies(target.name, count)
 
     def _random_attack(self, game: GameManager):
@@ -161,69 +242,6 @@ class BaseAgent:
         game.fortify(source.name, target, count)
 
 
-def create_game_tools(game: GameManager):
-    def get_state_tool() -> str:
-        """Returns the current game state, including map territories and your available reinforcements."""
-        state = game.get_player_state(game.get_current_player().name)
-        return json.dumps(state)
-
-    def place_armies_tool(territory_name: str, count: int) -> str:
-        """Places the specified number of armies on a territory you own."""
-        success = game.place_armies(territory_name, count)
-        if success:
-            return f"Successfully placed {count} armies on {territory_name}."
-        return "Failed to place armies. Check phase, ownership, and available reinforcements."
-
-    def attack_tool(attacker_name: str, defender_name: str, attacker_dice: int) -> str:
-        """Attacks an adjacent enemy territory from one of your territories with the specified number of dice (1-3)."""
-        res = game.attack(attacker_name, defender_name, attacker_dice)
-        if res:
-            return f"Attack result: {res}. Conquered: {res['conquered']}."
-        return "Failed to attack. Check adjacency, ownership, and unit counts."
-
-    def trade_cards_tool(card_names: str) -> str:
-        """Trade a set of 3 cards (comma-separated names) for bonus reinforcements. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8). Call get_state_tool first to see your cards."""
-        try:
-            cards = [c.strip() for c in card_names.split(',')]
-            if len(cards) != 3:
-                return "Error: Provide exactly 3 card names separated by commas."
-            
-            # Check if player actually owns these cards and if they form a set
-            player = game.get_current_player()
-            if not all(c in player.cards for c in cards):
-                return f"Error: You do not own some of these cards: {cards}"
-            
-            success = game.trade_cards(cards)
-            if success:
-                return f"Success: Cards {cards} traded! New reinforcements available: {game.reinforcements_to_place}."
-            return f"Error: {cards} do not form a valid set. Valid sets: Jolly+2same(+12), 1ofeach(+10), 3same(+8)."
-        except Exception as e:
-            return f"Error trading cards: {e}"
-
-    def fortify_tool(from_t_name: str, to_t_name: str, count: int) -> str:
-        """Moves armies from one of your territories to an adjacent territory you own."""
-        success = game.fortify(from_t_name, to_t_name, count)
-        if success:
-            return f"Successfully fortified {to_t_name} from {from_t_name}."
-        return "Failed to fortify. Check adjacency, ownership, and unit counts."
-
-    def end_phase_tool() -> str:
-        """Ends your current phase. Use this when you are done attacking or fortifying."""
-        success = game.next_phase()
-        if success:
-            return "Phase ended successfully."
-        return "Could not end phase right now."
-
-    return [
-        StructuredTool.from_function(get_state_tool),
-        StructuredTool.from_function(place_armies_tool),
-        StructuredTool.from_function(attack_tool),
-        StructuredTool.from_function(fortify_tool),
-        StructuredTool.from_function(end_phase_tool),
-        StructuredTool.from_function(trade_cards_tool),
-    ]
-
-
 class TerritoryAgent:
     def __init__(self, name: str, starting_territory: str, llm=None):
         self.name = name
@@ -251,7 +269,7 @@ class CrewAIFaction:
     No human interaction required — scoring is fully automatic.
     """
 
-    def __init__(self, player_name: str, scoring_enabled: bool = True, provider: str = None):
+    def __init__(self, player_name: str, scoring_enabled: bool = True, provider: str = None, max_agents_per_faction: int = -1):
         self.name = player_name
         self.agents: List[TerritoryAgent] = []
         self.initialized = False
@@ -259,14 +277,42 @@ class CrewAIFaction:
         self.last_score: Optional[TurnScore] = None
         self.turn_history: List[Dict] = []  # Persisted score history
         self.llm = get_llm(provider)
+        self.max_agents_per_faction = max_agents_per_faction
 
     def _sync_territories(self, game: GameManager):
         player = game.get_current_player()
         my_territory_names = [t.name for t in game.territories.values() if t.owner == player]
 
         if not self.initialized:
-            for t_name in my_territory_names:
-                self.agents.append(TerritoryAgent(f"Agent_{t_name}", t_name, llm=self.llm))
+            num_territories = len(my_territory_names)
+            limit = self.max_agents_per_faction
+            
+            if limit <= 0 or limit >= num_territories:
+                # Default behavior: one agent per territory
+                for t_name in my_territory_names:
+                    self.agents.append(TerritoryAgent(f"Agent_{t_name}", t_name, llm=self.llm))
+            else:
+                # Limited agents: split territories as equally as possible
+                # Example: 21 territories, 5 agents -> 5, 4, 4, 4, 4
+                chunk_size = num_territories // limit
+                remainder = num_territories % limit
+                
+                start_idx = 0
+                for i in range(limit):
+                    # Distribute the remainder across the first few agents
+                    current_chunk_size = chunk_size + (1 if i < remainder else 0)
+                    end_idx = start_idx + current_chunk_size
+                    
+                    agent_territories = my_territory_names[start_idx:end_idx]
+                    if agent_territories:
+                        # Use the first territory as the "starting" one for naming/role
+                        agent = TerritoryAgent(f"Commander_{i+1}", agent_territories[0], llm=self.llm)
+                        agent.territories = agent_territories
+                        agent.update_goal()
+                        self.agents.append(agent)
+                    
+                    start_idx = end_idx
+            
             self.initialized = True
             return
 
@@ -343,7 +389,8 @@ class CrewAIFaction:
                     cards_info = f"\n\nYou hold {len(player.cards)} cards but no tradeable set yet."
             task_desc = (
                 f"Use 'place_armies_tool' to place {game.reinforcements_to_place} armies across "
-                f"your territories strategically. When done, use 'end_phase_tool'."
+                f"your territories strategically. You can call the tool multiple times to split "
+                f"reinforcements between different territories. When done, use 'end_phase_tool'."
                 f"{cards_info}"
             )
         elif phase_name == "BATTLE":
@@ -391,8 +438,14 @@ class CrewAIFaction:
         # Failsafe: ensure the phase advances
         if phase_name != "INITIAL_PLACEMENT" and game.phase.name == phase_name:
             if phase_name == "PLACE_ARMIES" and game.reinforcements_to_place > 0:
-                t = random.choice([a.territories[0] for a in self.agents if a.territories])
-                game.place_armies(t, game.reinforcements_to_place)
+                player = game.get_current_player()
+                my_territories = [t.name for t in game.territories.values() if t.owner == player]
+                if my_territories:
+                    while game.reinforcements_to_place > 0:
+                        t = random.choice(my_territories)
+                        # Small batches for failsafe distribution
+                        amt = random.randint(1, min(game.reinforcements_to_place, 3))
+                        game.place_armies(t, amt)
             game.next_phase()
 
 
@@ -407,7 +460,7 @@ class SimulationManager:
         # Per-simulation scoring toggle
         self.scoring_enabled: Dict[str, bool] = {}
 
-    def create_simulation(self, players_config: List[Dict[str, str]], scoring_enabled: bool = True) -> str:
+    def create_simulation(self, players_config: List[Dict[str, str]], scoring_enabled: bool = True, max_agents_per_faction: int = -1) -> str:
         sim_id = str(uuid.uuid4())[:8]
         player_names = [p["name"] for p in players_config]
         game = GameManager(player_names)
@@ -426,7 +479,12 @@ class SimulationManager:
                 if agent_type.startswith("crew"):
                     parts = agent_type.split(":")
                     provider = parts[1] if len(parts) > 1 else None
-                    self.ai_factions[sim_id][p_name] = CrewAIFaction(p_name, scoring_enabled=scoring_enabled, provider=provider)
+                    self.ai_factions[sim_id][p_name] = CrewAIFaction(
+                        p_name, 
+                        scoring_enabled=scoring_enabled, 
+                        provider=provider,
+                        max_agents_per_faction=max_agents_per_faction
+                    )
                 elif agent_type == "base":
                     self.base_agents[sim_id][p_name] = BaseAgent(p_name)
 
@@ -441,14 +499,18 @@ class SimulationManager:
             faction.scoring_enabled = enabled
         print(f"[SCORING] Sim {sim_id}: auto-scoring {'ENABLED' if enabled else 'DISABLED'}")
 
-    def create_batch(self, count: int, players_config: List[Dict[str, str]], scoring_enabled: bool = True) -> List[str]:
+    def create_batch(self, count: int, players_config: List[Dict[str, str]], scoring_enabled: bool = True, max_agents_per_faction: int = -1) -> List[str]:
         ids = []
         for i in range(count):
             batch_config = [
                 {"name": f"B{i}_{p['name']}", "agent_type": p["agent_type"]}
                 for p in players_config
             ]
-            sim_id = self.create_simulation(batch_config, scoring_enabled=scoring_enabled)
+            sim_id = self.create_simulation(
+                batch_config, 
+                scoring_enabled=scoring_enabled,
+                max_agents_per_faction=max_agents_per_faction
+            )
             ids.append(sim_id)
             self.start_autoplay(sim_id)
         return ids

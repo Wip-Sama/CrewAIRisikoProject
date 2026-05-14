@@ -20,6 +20,8 @@ interface PixelPerfectMapProps {
   highlightedTerritory: string | null;
   lastActedTerritory: string | null;
   isJollyHovered: boolean;
+  currentPhase: string;
+  currentPlayer: string;
 }
 
 const MAP_WIDTH = 1227;
@@ -33,7 +35,9 @@ export const PixelPerfectMap: React.FC<PixelPerfectMapProps> = ({
   hoveredPlayer,
   highlightedTerritory,
   lastActedTerritory,
-  isJollyHovered
+  isJollyHovered,
+  currentPhase,
+  currentPlayer
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasesRef = useRef<Record<string, HTMLCanvasElement>>({});
@@ -131,10 +135,28 @@ export const PixelPerfectMap: React.FC<PixelPerfectMapProps> = ({
       style={{ cursor: hoveredTerritory ? 'pointer' : 'default' }}
     >
       {Object.values(territories).map((t) => {
-        const isDimmed = (hoveredPlayer && t.owner !== hoveredPlayer) || (isJollyHovered && t.owner !== territories[Object.keys(territories)[0]].owner); 
-        // Note: For Jolly, the user said "grayed out", I'll interpret as dimming everything except current player's
-        // Actually, if it's Jolly, let's dim EVERYTHING except the player's own territories.
+        let isDimmed = (hoveredPlayer && t.owner !== hoveredPlayer) || (isJollyHovered && t.owner !== territories[Object.keys(territories)[0]].owner); 
         
+        // Advanced dimming for valid moves
+        if (selectedTerritory) {
+          const isSelected = t.name === selectedTerritory.name;
+          const isAdjacent = selectedTerritory.adjacent.includes(t.name);
+          
+          if (currentPhase === 'BATTLE') {
+            // Highlight selected and ENEMY adjacent
+            const isValidTarget = isAdjacent && t.owner !== currentPlayer;
+            if (!isSelected && !isValidTarget) {
+              isDimmed = true;
+            }
+          } else if (currentPhase === 'MOVE') {
+            // Highlight selected and FRIENDLY adjacent
+            const isValidTarget = isAdjacent && t.owner === currentPlayer;
+            if (!isSelected && !isValidTarget) {
+              isDimmed = true;
+            }
+          }
+        }
+
         const isActed = lastActedTerritory === t.name;
         const isFocused = hoveredTerritory === t.name || 
                           selectedTerritory?.name === t.name || 

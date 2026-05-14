@@ -258,8 +258,8 @@ class GameManager:
 
     def _calculate_reinforcements(self):
         player = self.get_current_player()
-        # Standard: Territories / 3, minimum 3
-        count = max(3, player.territories_count // 3)
+        # Standard: Territories / 3, minimum 0
+        count = max(0, player.territories_count // 3)
         
         # Continent bonuses
         player_territories = [t.name for t in self.territories.values() if t.owner == player]
@@ -280,16 +280,29 @@ class GameManager:
 
         if obj.type == "continent":
             player_territories = [t.name for t in self.territories.values() if t.owner == player]
-            continents_owned = 0
-            for continent, members in game_map.continents.items():
-                if all(m in player_territories for m in members):
-                    if continent in obj.target_continents:
-                        continents_owned += 1
-                    elif obj.target_count > len(obj.target_continents):
-                        # For "and a third continent of your choice"
-                        continents_owned += 1
-            if continents_owned >= (len(obj.target_continents) if obj.target_count == 0 else obj.target_count):
-                met = True
+            
+            # 1. Check if all REQUIRED continents are owned
+            all_required_owned = True
+            for continent in obj.target_continents:
+                members = game_map.continents.get(continent, [])
+                if not all(m in player_territories for m in members):
+                    all_required_owned = False
+                    break
+            
+            if all_required_owned:
+                # 2. If target_count > required, count how many ADDITIONAL continents are owned
+                if obj.target_count > len(obj.target_continents):
+                    continents_owned = len(obj.target_continents)
+                    for continent, members in game_map.continents.items():
+                        if continent not in obj.target_continents:
+                            if all(m in player_territories for m in members):
+                                continents_owned += 1
+                    
+                    if continents_owned >= obj.target_count:
+                        met = True
+                else:
+                    # No choice continents needed, just the required ones
+                    met = True
 
         elif obj.type == "territory":
             if player.territories_count >= obj.target_count:
@@ -550,7 +563,12 @@ class GameManager:
                     "cards": [
                         {"name": c, "type": self._get_card_type(c).name} for c in p.cards
                     ],
-                    "predicted_reinforcements": self.calculate_predicted_reinforcements(p)
+                    "predicted_reinforcements": self.calculate_predicted_reinforcements(p),
+                    "conquered_continents": [
+                        {"name": name, "bonus": game_map.continentsBonus[name]}
+                        for name, members in game_map.continents.items()
+                        if all(self.territories[m].owner == p for m in members)
+                    ]
                 } for p in self.players
             ]
         }

@@ -26,6 +26,7 @@ interface Player {
   }
   cards: { name: string, type: string }[]
   predicted_reinforcements: number
+  conquered_continents: { name: string, bonus: number }[]
 }
 
 interface DiceResult {
@@ -70,6 +71,7 @@ function App() {
   const [batchConfig, setBatchConfig] = useState({
     count: 1,
     scoring: true,
+    max_agents_per_faction: -1,
     players: defaultPlayerNames.slice(0, 4).map(name => ({ name, agent_type: 'human' }))
   })
 
@@ -146,7 +148,8 @@ function App() {
       const res = await axios.post('/api/simulations/create_batch', {
         batch_count: batchConfig.count,
         players: batchConfig.players,
-        scoring: batchConfig.scoring
+        scoring: batchConfig.scoring,
+        max_agents_per_faction: batchConfig.max_agents_per_faction
       })
       const newId = res.data.simulation_ids[0]
       setSimulationId(newId)
@@ -297,6 +300,25 @@ function App() {
                     </div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>{p.territories} Territories</div>
 
+                    {/* Continent Markers */}
+                    {p.conquered_continents.length > 0 && (
+                      <div className="continent-badges">
+                        {p.conquered_continents.map(c => (
+                          <div 
+                            key={c.name} 
+                            className="continent-badge" 
+                            title={`${c.name}: +${c.bonus} reinforcements`}
+                          >
+                            {c.name[0]}
+                            <span className="continent-tooltip">
+                              <strong>{c.name}</strong><br/>
+                              +{c.bonus} Units/turn
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Score bar */}
                     {score && (
                       <div className="score-bar-container" title={`Score breakdown: T=${Math.round(score.territory_score)} C=${Math.round(score.continent_score)} A=${Math.round(score.army_score)} K=${Math.round(score.card_score)} F=${Math.round(score.frontier_pressure)}`}>
@@ -442,6 +464,8 @@ function App() {
             highlightedTerritory={hoveredCard?.name || null}
             isJollyHovered={hoveredCard?.type === 'JOLLY'}
             lastActedTerritory={gameState.last_acted_territory}
+            currentPhase={gameState.phase}
+            currentPlayer={gameState.current_player}
             onTerritoryClick={(t) => {
               if (gameState.phase === 'BATTLE' && selectedTerritory && selectedTerritory.owner === gameState.current_player && t.owner !== gameState.current_player) {
                 if (selectedTerritory.adjacent.includes(t.name)) {
@@ -660,6 +684,17 @@ function App() {
                         });
                       }}
                       className="sim-input"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <span className="label">Max Agents/Faction</span>
+                    <input
+                      type="number"
+                      min="-1"
+                      value={batchConfig.max_agents_per_faction}
+                      onChange={e => setBatchConfig({ ...batchConfig, max_agents_per_faction: parseInt(e.target.value) })}
+                      className="sim-input"
+                      title="-1 for 1 agent per territory"
                     />
                   </div>
                 </div>

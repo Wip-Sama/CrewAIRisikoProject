@@ -33,6 +33,7 @@ class BatchCreateRequest(BaseModel):
     batch_count: int
     players: List[PlayerConfig]
     scoring: bool = True  # Whether auto-scoring feedback is injected into CrewAI prompts
+    max_agents_per_faction: int = -1
 
 
 class ReinforceRequest(BaseModel):
@@ -82,7 +83,12 @@ async def list_simulations():
 @app.post("/api/simulations/create_batch")
 async def create_batch(req: BatchCreateRequest):
     configs = [{"name": p.name, "agent_type": p.agent_type} for p in req.players]
-    ids = simulation_manager.create_batch(req.batch_count, configs, scoring_enabled=req.scoring)
+    ids = simulation_manager.create_batch(
+        req.batch_count, 
+        configs, 
+        scoring_enabled=req.scoring,
+        max_agents_per_faction=req.max_agents_per_faction
+    )
     return {"simulation_ids": ids, "scoring_enabled": req.scoring}
 
 
