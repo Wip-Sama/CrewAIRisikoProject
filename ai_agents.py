@@ -87,7 +87,8 @@ def create_game_tools(game: GameManager):
 
     @tool("attack_tool")
     def attack_tool(attacker_name: str, defender_name: str, attacker_dice: int) -> str:
-        """Attacks an adjacent enemy territory from one of your territories with the specified number of dice (1-3)."""
+        """Attacks an adjacent enemy territory from one of your territories with the specified number of dice (1-3). 
+        You can call this multiple times per turn to launch several attacks or strike from different fronts."""
         res = game.attack(attacker_name, defender_name, attacker_dice)
         if res:
             return f"Attack result: {res}. Conquered: {res['conquered']}."
@@ -396,7 +397,8 @@ class CrewAIFaction:
         elif phase_name == "BATTLE":
             task_desc = (
                 f"Evaluate the map. Use 'attack_tool' to attack enemy territories where you have "
-                f"an advantage. When done, use 'end_phase_tool'."
+                f"an advantage. You can attack multiple times per turn and on multiple fronts. "
+                f"When done, use 'end_phase_tool'."
             )
         elif phase_name == "MOVE":
             task_desc = (
