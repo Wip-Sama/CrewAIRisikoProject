@@ -29,7 +29,7 @@ def get_llm(provider=None):
     Returns a configured crewai.LLM instance based on .env settings.
     """
     if not provider:
-        provider = os.getenv("MODEL_PROVIDER", "openai").lower()
+        provider = os.getenv("MODEL_PROVIDER", "groq").lower()
     
     try:
         if provider == "openai":
@@ -37,14 +37,14 @@ def get_llm(provider=None):
             return LLM(model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"), api_key=api_key)
         elif provider == "google":
             api_key = os.getenv("GOOGLE_API_KEY")
-            # crewai.LLM handles 'gemini/' prefix natively or expects 'google/'
-            model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-1.5-pro")
-            if not model_name.startswith("gemini/"):
+            model_name = os.getenv("GOOGLE_MODEL_NAME", "gemini-2.0-flash")
+            # Both Gemini and Gemma models use 'gemini/' prefix for LiteLLM
+            if not model_name.startswith(("gemini/", "vertex_ai/")):
                 model_name = f"gemini/{model_name}"
             return LLM(model=model_name, api_key=api_key)
         elif provider == "groq":
             api_key = os.getenv("GROQ_API_KEY")
-            model_name = os.getenv("GROQ_MODEL_NAME", "llama-3.1-8b-instant")
+            model_name = os.getenv("GROQ_MODEL_NAME", "groq/llama-3.1-8b-instant")
             # Groq needs 'groq/' prefix for LiteLLM
             if not model_name.startswith("groq/"):
                 model_name = f"groq/{model_name}"
@@ -55,6 +55,15 @@ def get_llm(provider=None):
             return LLM(
                 model=f"ollama/{model_name}",
                 base_url=base_url
+            )
+        elif provider == "qwen":
+            api_key = os.getenv("QWEN_API_KEY")
+            model_name = os.getenv("QWEN_MODEL_NAME", "qwen-plus")
+            base_url = os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+            return LLM(
+                model=f"openai/{model_name}",
+                base_url=base_url,
+                api_key=api_key
             )
         elif provider == "lmstudio":
             model_name = os.getenv("LMSTUDIO_MODEL_NAME", "local-model")
@@ -141,7 +150,6 @@ def create_game_tools(game: GameManager):
         end_phase_tool,
         trade_cards_tool,
     ]
-
 
 
 class BaseAgent:
@@ -436,6 +444,11 @@ class CrewAIFaction:
             crew.kickoff()
         except Exception as e:
             print(f"[AI Error] {self.name} failed CrewAI task: {e}")
+
+        # Rate-limit delay between API requests
+        delay = float(os.getenv("REQUEST_DELAY", 0))
+        if delay > 0:
+            time.sleep(delay)
 
         # Failsafe: ensure the phase advances
         if phase_name != "INITIAL_PLACEMENT" and game.phase.name == phase_name:

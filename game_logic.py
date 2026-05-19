@@ -54,8 +54,8 @@ class GameManager:
         self._initialize_deck()
         self._assign_initial_territories()
         self._assign_objectives(colors)
-        self._calculate_initial_reinforcements()
         self._calculate_reinforcements() # For standard loop setup
+        self._calculate_initial_reinforcements()
 
     def add_log(self, message: str):
         self.battle_log.append(message)
